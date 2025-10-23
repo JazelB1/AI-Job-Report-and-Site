@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Jobs — April 2025 (CSV-Driven)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', sans-serif; }
+    .card { border-radius: 1rem; box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+    .chip { border-radius: 9999px; padding: 0.25rem 0.6rem; }
+    .btn { border-radius: 0.75rem; padding: 0.6rem 1rem; font-weight: 600; }
+    .link { color: #2563eb; }
+    .link:hover { text-decoration: underline; }
+    .hidden { display: none; }
+    .modal-bg { background: rgba(0,0,0,0.45); }
+  </style>
+</head>
+<body class="bg-gray-50">
+  <header class="bg-white sticky top-0 z-50 border-b">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <a href="#/jobs" class="text-2xl font-bold">AI Jobs <span class="text-blue-600">April 2025</span></a>
+      <nav class="flex items-center gap-4">
+        <a href="#/jobs" class="link">All Jobs</a>
+        <a href="#/about" class="link">About</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <div id="toast" class="hidden mb-4 p-3 rounded-lg bg-yellow-50 text-yellow-800 text-sm"></div>
+    <div id="page-jobs" class="space-y-6"></div>
+    <div id="page-job" class="space-y-6 hidden"></div>
+    <div id="page-about" class="space-y-6 hidden">
+      <div class="card bg-white p-6">
+        <h1 class="text-xl font-semibold mb-2">About this Demo</h1>
+        <p class="text-gray-700">This version loads your <code>ai_job_dataset.csv</code> at runtime (or a custom URL via <code>?csv=</code>), filters to <strong>April 2025</strong>, and renders a jobs list and detail pages that you can link to from Power BI. Submissions are stored in localStorage only.</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- Apply Modal -->
+  <div id="apply-modal" class="fixed inset-0 items-center justify-center hidden">
+    <div class="absolute inset-0 modal-bg"></div>
+    <div class="relative bg-white rounded-2xl max-w-lg w-full mx-4 p-6">
+      <div class="flex items-start justify-between">
+        <h3 class="text-lg font-semibold" id="apply-job-title">Apply</h3>
+        <button id="apply-close" class="text-gray-500 hover:text-gray-900">&times;</button>
+      </div>
+      <form id="apply-form" class="mt-4 space-y-3">
+        <input type="hidden" name="job_id" id="apply-job-id" />
+        <div>
+          <label class="block text-sm font-medium">Full name</label>
+          <input required name="name" class="mt-1 w-full border rounded-lg p-2" placeholder="Ada Lovelace" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium">Email</label>
+          <input required type="email" name="email" class="mt-1 w-full border rounded-lg p-2" placeholder="ada@example.com" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium">LinkedIn / Portfolio URL</label>
+          <input name="url" class="mt-1 w-full border rounded-lg p-2" placeholder="https://linkedin.com/in/you" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium">Why are you a good fit?</label>
+          <textarea name="note" rows="4" class="mt-1 w-full border rounded-lg p-2" placeholder="Brief pitch..."></textarea>
+        </div>
+        <div class="flex items-center justify-end gap-2 pt-2">
+          <button type="button" id="apply-cancel" class="btn bg-gray-100 hover:bg-gray-200">Cancel</button>
+          <button type="submit" class="btn bg-blue-600 text-white hover:bg-blue-700">Submit Application</button>
+        </div>
+      </form>
+      <div id="apply-success" class="hidden mt-4 p-3 rounded-lg bg-green-50 text-green-800 text-sm">
+        Application submitted! (Saved to your browser's localStorage for demo purposes.)
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const EXP_LBL = { SE: "Senior", MI: "Mid", EN: "Entry" };
+    const EMP_LBL = { FT: "Full-time", PT: "Part-time", CT: "Contract", FL: "Freelance" };
+    const SIZE_LBL = { S: "Small", M: "Medium", L: "Large" };
+
+    const qs = (sel, el=document) => el.querySelector(sel);
+    const qsa = (sel, el=document) => [...el.querySelectorAll(sel)];
+    const fmtMoney = (n) => new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+
+    function getQueryParam(name) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(name);
+    }
+
+    async function loadCSV() {
+      const csvUrl = getQueryParam('csv') || 'ai_job_dataset.csv';
+      try {
+        const resp = await fetch(csvUrl, { cache: 'no-store' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const text = await resp.text();
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        if (parsed.errors.length) {
+          console.warn('CSV parse errors:', parsed.errors.slice(0,3));
+        }
+        return parsed.data;
+      } catch (e) {
+        showToast('Failed to load CSV. Check the file location or the ?csv= URL. Error: ' + e.message);
+        return [];
+      }
+    }
+
+    function normalizeRow(r) {
+      // Ensure types; trim fields
+      const num = (v) => {
+        const n = Number(String(v || '').replace(/[^0-9.\-]/g, ''));
+        return isFinite(n) ? n : null;
+      };
+      const str = (v) => (v == null ? '' : String(v)).trim();
+      return {
+        job_id: str(r.job_id),
+        job_title: str(r.job_title),
+        salary_usd: num(r.salary_usd),
+        salary_currency: str(r.salary_currency || 'USD'),
+        experience_level: str(r.experience_level),
+        employment_type: str(r.employment_type),
+        company_location: str(r.company_location),
+        company_size: str(r.company_size),
+        employee_residence: str(r.employee_residence),
+        remote_ratio: num(r.remote_ratio),
+        required_skills: str(r.required_skills),
+        education_required: str(r.education_required),
+        years_experience: num(r.years_experience),
+        industry: str(r.industry),
+        posting_date: str(r.posting_date),
+        application_deadline: str(r.application_deadline),
+        job_description_length: num(r.job_description_length),
+        benefits_score: num(r.benefits_score),
+        company_name: str(r.company_name)
+      };
+    }
+
+    function filterApril2025(rows) {
+      return rows.filter(r => /^2025-04-/.test(r.posting_date));
+    }
+
+    function showToast(msg) {
+      const t = qs('#toast');
+      t.textContent = msg;
+      t.classList.remove('hidden');
+    }
+
+    let JOBS = [];
+
+    function router() {
+      const hash = location.hash || "#/jobs";
+      const [_, route, param] = hash.split("/");
+
+      qs("#page-jobs").classList.add("hidden");
+      qs("#page-job").classList.add("hidden");
+      qs("#page-about").classList.add("hidden");
+
+      if (route === "job" && param) {
+        renderJob(param);
+        qs("#page-job").classList.remove("hidden");
+      } else if (route === "about") {
+        qs("#page-about").classList.remove("hidden");
+      } else {
+        renderJobs();
+        qs("#page-jobs").classList.remove("hidden");
+      }
+    }
+
+    function renderJobs() {
+      const container = qs("#page-jobs");
+      container.innerHTML = "";
+
+      const controls = document.createElement("div");
+      controls.className = "card bg-white p-4 flex flex-col md:flex-row md:items-end gap-3";
+      controls.innerHTML = `
+        <div class="flex-1">
+          <label class="block text-sm font-medium">Search</label>
+          <input id="search" class="mt-1 w-full border rounded-lg p-2" placeholder="Search title, company, skill..." />
+        </div>
+        <div>
+          <label class="block text-sm font-medium">Remote</label>
+          <select id="remote" class="mt-1 border rounded-lg p-2">
+            <option value="">Any</option>
+            <option value="0">Onsite</option>
+            <option value="50">Hybrid</option>
+            <option value="100">Remote</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium">Experience</label>
+          <select id="exp" class="mt-1 border rounded-lg p-2">
+            <option value="">Any</option>
+            <option value="EN">Entry</option>
+            <option value="MI">Mid</option>
+            <option value="SE">Senior</option>
+          </select>
+        </div>
+      `;
+      container.appendChild(controls);
+
+      const list = document.createElement("div");
+      list.className = "grid grid-cols-1 md:grid-cols-2 gap-4";
+      container.appendChild(list);
+
+      function applyFilters() {
+        const s = qs("#search").value.toLowerCase();
+        const r = qs("#remote").value;
+        const e = qs("#exp").value;
+
+        const rows = JOBS.filter(j => {
+          const text = (j.job_title + " " + j.company_name + " " + j.required_skills + " " + j.industry).toLowerCase();
+          const matchText = !s || text.includes(s);
+          const matchRemote = !r || String(j.remote_ratio) === r;
+          const matchExp = !e || j.experience_level === e;
+          return matchText && matchRemote && matchExp;
+        });
+
+        list.innerHTML = "";
+        if (!rows.length) {
+          list.innerHTML = `<div class="col-span-full text-gray-500">No April 2025 jobs match your filters.</div>`;
+          return;
+        }
+
+        rows.forEach(j => {
+          const skills = (j.required_skills || '').split(",").map(s => s.trim()).filter(Boolean);
+          const card = document.createElement("div");
+          card.className = "card bg-white p-5";
+          card.innerHTML = `
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <a href="#/job/${j.job_id}" class="text-lg font-semibold hover:underline">${j.job_title}</a>
+                <div class="text-gray-600">${j.company_name} • ${j.company_location} • <span class="uppercase">${j.industry}</span></div>
+              </div>
+              <div class="text-right">
+                <div class="font-semibold">${fmtMoney(j.salary_usd || 0)} <span class="text-gray-500 text-sm">(USD)</span></div>
+                <div class="text-gray-500 text-xs">Listed: ${j.posting_date}</div>
+              </div>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <span class="chip bg-blue-50 text-blue-700">${EXP_LBL[j.experience_level] || j.experience_level}</span>
+              <span class="chip bg-purple-50 text-purple-700">${EMP_LBL[j.employment_type] || j.employment_type}</span>
+              <span class="chip bg-emerald-50 text-emerald-700">${j.remote_ratio === 100 ? "Remote" : j.remote_ratio === 50 ? "Hybrid" : "Onsite"}</span>
+              <span class="chip bg-gray-100 text-gray-700">${SIZE_LBL[j.company_size] || j.company_size} company</span>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+              ${skills.map(s => `<span class="chip bg-gray-50 border text-gray-700">${s}</span>`).join("")}
+            </div>
+            <div class="mt-4 flex items-center gap-2">
+              <a href="#/job/${j.job_id}" class="btn bg-blue-600 text-white hover:bg-blue-700">View</a>
+              <button data-apply="${j.job_id}" class="btn bg-gray-100 hover:bg-gray-200">Quick Apply</button>
+            </div>
+          `;
+          list.appendChild(card);
+        });
+
+        qsa("button[data-apply]").forEach(btn => {
+          btn.onclick = () => openApply(btn.getAttribute("data-apply"));
+        });
+      }
+
+      applyFilters();
+      qs("#search").addEventListener("input", applyFilters);
+      qs("#remote").addEventListener("change", applyFilters);
+      qs("#exp").addEventListener("change", applyFilters);
+    }
+
+    function renderJob(jobId) {
+      const job = JOBS.find(j => j.job_id === jobId);
+      const container = qs("#page-job");
+      container.innerHTML = "";
+
+      if (!job) {
+        container.innerHTML = `<div class="card bg-white p-6">Job not found. <a href="#/jobs" class="link">Back to jobs</a></div>`;
+        return;
+      }
+
+      const skills = (job.required_skills || '').split(",").map(s => s.trim()).filter(Boolean);
+      const block = document.createElement("div");
+      block.className = "card bg-white p-6";
+      block.innerHTML = `
+        <div class="flex flex-col md:flex-row justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-bold">${job.job_title}</h1>
+            <div class="text-gray-600">${job.company_name} • ${job.company_location} • ${job.industry}</div>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <span class="chip bg-blue-50 text-blue-700">${EXP_LBL[job.experience_level] || job.experience_level}</span>
+              <span class="chip bg-purple-50 text-purple-700">${EMP_LBL[job.employment_type] || job.employment_type}</span>
+              <span class="chip bg-emerald-50 text-emerald-700">${job.remote_ratio === 100 ? "Remote" : job.remote_ratio === 50 ? "Hybrid" : "Onsite"}</span>
+              <span class="chip bg-gray-100 text-gray-700">${SIZE_LBL[job.company_size] || job.company_size} company</span>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm text-gray-500">Compensation (USD)</div>
+            <div class="text-2xl font-bold">${fmtMoney(job.salary_usd || 0)}</div>
+            <div class="text-xs text-gray-500">Listed: ${job.posting_date} • Apply by ${job.application_deadline}</div>
+          </div>
+        </div>
+
+        <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="p-4 bg-gray-50 rounded-xl">
+            <div class="text-xs text-gray-500">Education</div>
+            <div class="font-semibold">${job.education_required}</div>
+          </div>
+          <div class="p-4 bg-gray-50 rounded-xl">
+            <div class="text-xs text-gray-500">Experience (years)</div>
+            <div class="font-semibold">${job.years_experience ?? ''}</div>
+          </div>
+          <div class="p-4 bg-gray-50 rounded-xl">
+            <div class="text-xs text-gray-500">Benefits Score</div>
+            <div class="font-semibold">${job.benefits_score ?? ''}</div>
+          </div>
+        </div>
+
+        <div class="mt-6">
+          <h2 class="font-semibold mb-2">Required Skills</h2>
+          <div class="flex flex-wrap gap-2">
+            ${skills.map(s => `<span class="chip bg-gray-50 border">${s}</span>`).join("")}
+          </div>
+        </div>
+
+        <div class="mt-6">
+          <h2 class="font-semibold mb-2">Role Summary</h2>
+          <p class="text-gray-700">This listing is rendered from your CSV. Customize your CSV description fields as needed. (job_description_length: <em>${job.job_description_length ?? ''}</em>)</p>
+        </div>
+
+        <div class="mt-6 flex items-center gap-2">
+          <a href="#/jobs" class="btn bg-gray-100 hover:bg-gray-200">Back</a>
+          <button class="btn bg-blue-600 text-white hover:bg-blue-700" id="apply-open" data-apply="${job.job_id}">Apply Now</button>
+        </div>
+      `;
+
+      container.appendChild(block);
+
+      const btn = qs("#apply-open");
+      if (btn) btn.onclick = () => openApply(job.job_id);
+    }
+
+    function openApply(jobId) {
+      const job = JOBS.find(j => j.job_id === jobId);
+      if (!job) return;
+      qs("#apply-job-title").textContent = `Apply — ${job.job_title} @ ${job.company_name}`;
+      qs("#apply-job-id").value = job.job_id;
+      qs("#apply-form").reset();
+      qs("#apply-success").classList.add("hidden");
+      const modal = qs("#apply-modal");
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    }
+
+    function closeApply() {
+      const modal = qs("#apply-modal");
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+    }
+
+    qs("#apply-close").onclick = closeApply;
+    qs("#apply-cancel").onclick = closeApply;
+
+    qs("#apply-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(e.target).entries());
+      const key = "demo_applications";
+      const all = JSON.parse(localStorage.getItem(key) || "[]");
+      all.push({ ...data, submitted_at: new Date().toISOString() });
+      localStorage.setItem(key, JSON.stringify(all));
+      qs("#apply-success").classList.remove("hidden");
+      setTimeout(closeApply, 900);
+    });
+
+    async function init() {
+      const rows = await loadCSV();
+      const normalized = rows.map(normalizeRow);
+      JOBS = filterApril2025(normalized);
+
+      if (!JOBS.length) {
+        showToast('Your CSV has no postings in April 2025. The page is ready; just add rows with posting_date like 2025-04-15.');
+      } else if (JOBS.length === 1) {
+        showToast('Only one April 2025 posting found in your CSV. Add more April rows to show multiple jobs.');
+      }
+
+      window.addEventListener("hashchange", router);
+      router();
+    }
+
+    init();
+  </script>
+</body>
+</html>
